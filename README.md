@@ -78,6 +78,7 @@ entered in the Identify tab.
 ```
 onetagger-cli identify -p <folder or file list> --acoustid-key <key> [--target <folder> --template <template>]
 onetagger-cli identify-undo -j <target>/.onetagger-identify/<timestamp>
+onetagger-cli identify-fix-paths -t <target>
 ```
 Without `--target` it is a dry run that only writes a JSON report.
 

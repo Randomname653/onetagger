@@ -134,18 +134,24 @@ pub fn destination(config: &ApplyConfig, tags: &TrackTags, source: &Path) -> Pat
     // Year of the first release, not of a reissue
     let year = tags.original_date.clone().or(tags.date.clone()).unwrap_or_default().chars().take(4).collect::<String>();
     let track = if tags.disc_total > 1 { format!("{}-{:02}", tags.disc, tags.track) } else { format!("{:02}", tags.track) };
-    let rendered = config.template
-        .replace("%albumartist%", &tags.album_artist)
-        .replace("%artist%", &tags.artist)
-        .replace("%album%", &tags.album)
-        .replace("%title%", &tags.title)
-        .replace("%year%", &year)
-        .replace("%track%", &track)
-        .replace(" ()", "");
+    render(config, &tags.album_artist, &tags.artist, &tags.album, &tags.title, &year, &track, source)
+}
+
+/// Fill the template. The template is split into folders first, so a "/" inside a value
+/// (AC/DC, "Song A / Song B") becomes "_" instead of an extra folder.
+fn render(config: &ApplyConfig, album_artist: &str, artist: &str, album: &str, title: &str, year: &str, track: &str, source: &Path) -> PathBuf {
     let mut path = config.target.clone();
-    let parts: Vec<&str> = rendered.split(['/', '\\']).collect();
+    let parts: Vec<&str> = config.template.split(['/', '\\']).collect();
     for (i, part) in parts.iter().enumerate() {
-        let part = sanitize(part);
+        let rendered = part
+            .replace("%albumartist%", album_artist)
+            .replace("%artist%", artist)
+            .replace("%album%", album)
+            .replace("%title%", title)
+            .replace("%year%", year)
+            .replace("%track%", track)
+            .replace(" ()", "");
+        let part = sanitize(&rendered);
         if i + 1 == parts.len() {
             let ext = source.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
             path.push(format!("{part}.{ext}"));
@@ -381,4 +387,102 @@ pub fn apply(result: &IdentifyResult, config: &ApplyConfig, journal: &Journal) -
     entry.done = true;
     journal.append(&entry)?;
     Ok(dest)
+}
+
+/// Repair library paths created before the "/" fix: files nested deeper than the template
+/// (e.g. "AC\DC\..." or "Song A\Song B.flac") are moved to the path the template gives now.
+/// Moves go into `journal`, so they can be undone. Returns (moved, errors).
+pub fn fix_paths(config: &ApplyConfig, journal: &Journal) -> Result<(usize, Vec<String>), Error> {
+    let year_re = regex::Regex::new(r"\((\d{4})\)$").unwrap();
+    let track_re = regex::Regex::new(r"^(\d+(?:-\d+)?) - ").unwrap();
+    let depth = config.template.split(['/', '\\']).count();
+    let mut files = vec![];
+    collect_audio(&config.target, &mut files);
+
+    let (mut moved, mut errors) = (0, vec![]);
+    for path in files {
+        let Ok(rel) = path.strip_prefix(&config.target) else { continue };
+        let mut parts: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
+        if parts.first().map(|p| p == ".onetagger-identify").unwrap_or(false) {
+            continue;
+        }
+        // Duplicates mirror the library inside _Duplikate
+        let base = if parts.first().map(|p| p == "_Duplikate").unwrap_or(false) {
+            parts.remove(0);
+            config.target.join("_Duplikate")
+        } else {
+            config.target.clone()
+        };
+        if parts.len() <= depth {
+            continue;
+        }
+        let result = (|| -> Result<Option<PathBuf>, Error> {
+            let year_index = parts.iter().position(|p| year_re.is_match(p)).ok_or(anyhow!("kein (Jahr)-Ordner"))?;
+            let year = year_re.captures(&parts[year_index]).unwrap()[1].to_string();
+            let track = parts.get(year_index + 1).and_then(|p| track_re.captures(p)).map(|c| c[1].to_string())
+                .ok_or(anyhow!("keine Tracknummer im Dateinamen"))?;
+            let mut tag = Tag::load_file(&path, false)?;
+            // Same separators as write_tags, otherwise "Title, with comma" is split
+            tag.set_separators(&TagSeparators { id3: "; ".into(), vorbis: None, mp4: "; ".into() });
+            let get = |f: Field| tag.tag().get_field(f).and_then(|v| v.first().cloned()).unwrap_or_default();
+            let (album_artist, artist, album, title) = (get(Field::AlbumArtist), get(Field::Artist), get(Field::Album), get(Field::Title));
+            if album.is_empty() || title.is_empty() {
+                return Err(anyhow!("Album/Titel-Tag fehlt"));
+            }
+            let fixed = ApplyConfig { target: base.clone(), template: config.template.clone() };
+            let new = render(&fixed, if album_artist.is_empty() { &artist } else { &album_artist }, &artist, &album, &title, &year, &track, &path);
+            if new == path {
+                return Ok(None);
+            }
+            if new.exists() {
+                return Err(anyhow!("Ziel existiert bereits: {}", new.display()));
+            }
+            let mut entry = journal.snapshot(&path, &new, None, None)?;
+            journal.append(&entry)?;
+            journal::move_file(&path, &new)?;
+            entry.done = true;
+            journal.append(&entry)?;
+            Ok(Some(new))
+        })();
+        match result {
+            Ok(Some(_)) => {
+                moved += 1;
+                // Remove folders left empty
+                let mut dir = path.parent().map(|p| p.to_owned());
+                while let Some(d) = dir {
+                    if d == base || d == config.target || std::fs::remove_dir(&d).is_err() {
+                        break;
+                    }
+                    dir = d.parent().map(|p| p.to_owned());
+                }
+            },
+            Ok(None) => {},
+            Err(e) => errors.push(format!("{}: {e}", path.display())),
+        }
+    }
+    Ok((moved, errors))
+}
+
+fn collect_audio(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect_audio(&p, out);
+        } else if matches!(p.extension().map(|e| e.to_string_lossy().to_lowercase()).as_deref(), Some("flac") | Some("mp3") | Some("m4a") | Some("mp4")) {
+            out.push(p);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slash_in_values_is_no_folder() {
+        let config = ApplyConfig { target: PathBuf::from("T"), template: DEFAULT_TEMPLATE.to_string() };
+        let p = render(&config, "AC/DC", "AC/DC", "Highway to Hell", "One Love / People Get Ready", "1979", "07", Path::new("x.flac"));
+        assert_eq!(p, PathBuf::from("T").join("AC_DC").join("Highway to Hell (1979)").join("07 - One Love _ People Get Ready.flac"));
+    }
 }

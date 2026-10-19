@@ -56,6 +56,18 @@ loosening the rule that AcoustID and Shazam must agree.
 - Missing write permission (e.g. files owned by another NAS user) is reported clearly and checked
   before anything is changed.
 
+### Identify: versions, paths
+- **Version rule:** versions are compared including the remixer ("Yeux Noir remix" vs. "Addal
+  remix") instead of being cut off. If Shazam names another version of the same song, the
+  version specific fingerprint decides (AcoustID score >= 0.90, length fits) and Shazam's album is
+  ignored, because it belongs to Shazam's version. Same for the live rule. If Shazam names no
+  version at all, nothing changes.
+- Remix recordings prefer the remix single / EP over an album that only has them as bonus track.
+- **Fix:** a "/" in a value (AC/DC, "Song A / Song B", dates like 4/22/1982) created extra folders.
+  The template is now split into folders before it is filled, so "/" becomes "_".
+  `onetagger-cli identify-fix-paths -t <target>` moves files affected by the old behaviour
+  (journaled, undo with `identify-undo`).
+
 ### Fork maintenance
 - Weekly GitHub Action (`.github/workflows/upstream-sync.yml`): updates the upstream status line in
   the README and merges new upstream commits. Conflicting upstream changes are never pushed to

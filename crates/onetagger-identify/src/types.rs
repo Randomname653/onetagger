@@ -40,6 +40,9 @@ pub struct RecordingCandidate {
     pub duration_ok: bool,
     /// Shazam agrees with this recording
     pub shazam_agrees: bool,
+    /// Same song, but Shazam names another version (remix / live / edit): the fingerprint decided
+    #[serde(default)]
+    pub shazam_other_version: bool,
     pub note: String,
 }
 

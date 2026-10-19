@@ -35,8 +35,14 @@ pub(crate) fn group_score(kind: Option<&str>, secondary: &[String], live_recordi
     if has("Live") && !live_recording {
         return (-30, "Live-Release, Aufnahme ist nicht live");
     }
-    if has("Remix") && remix_recording && !has("Compilation") {
-        return (30, "Remix-Release");
+    // Remixes live on singles / remix EPs; an album only has them as bonus tracks
+    if remix_recording && !has("Compilation") && !has("DJ-mix") {
+        if matches!(kind, Some("Single") | Some("EP")) {
+            return (50, "Remix-Single/EP");
+        }
+        if has("Remix") {
+            return (45, "Remix-Release");
+        }
     }
     if SECONDARY_BAD.iter().any(|b| has(b)) {
         return (-10, "Compilation/Mix");

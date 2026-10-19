@@ -141,6 +141,18 @@ fn main() {
 
             renamer.rename(&names, &config).expect("Failed renaming!");
         },
+        Actions::IdentifyFixPaths { target, template } => {
+            let config = onetagger_identify::apply::ApplyConfig {
+                target: target.clone(),
+                template: template.clone().unwrap_or(onetagger_identify::apply::DEFAULT_TEMPLATE.to_string()),
+            };
+            let journal = onetagger_identify::pipeline::new_journal(target).expect("Failed creating journal");
+            let (moved, errors) = onetagger_identify::apply::fix_paths(&config, &journal).expect("Failed fixing paths");
+            println!("Moved {moved} files, {} errors (undo: identify-undo -j {})", errors.len(), journal.dir.display());
+            for e in errors {
+                println!("  {e}");
+            }
+        },
         Actions::IdentifyUndo { journal } => {
             let (ok, errors) = onetagger_identify::journal::undo(journal).expect("Failed reading journal");
             println!("Restored {ok} files, {} errors", errors.len());
@@ -410,6 +422,16 @@ enum Actions {
         /// Journal folder (<target>/.onetagger-identify/<timestamp>)
         #[clap(short, long)]
         journal: PathBuf,
+    },
+    /// Move library files that a "/" in a tag split into extra folders (undo with identify-undo)
+    IdentifyFixPaths {
+        /// Library / target folder
+        #[clap(short, long)]
+        target: PathBuf,
+
+        /// Template that was used (default: the Identify default)
+        #[clap(long)]
+        template: Option<String>,
     },
     /// Start OneTagger server mode
     Server {

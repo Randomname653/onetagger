@@ -181,11 +181,17 @@ fn evaluate(result: &mut IdentifyResult, aid: &AcoustIdResponse, siblings: &Hash
     };
 
     let recs: Vec<&crate::acoustid::AidRecording> = cons.equivalent.iter().map(|j| &cons.recordings[*j]).collect();
-    let mut choice = release::choose(&recs, result.shazam.as_ref(), siblings);
+    // Shazam named another version: its album belongs to that version, not to ours
+    let other_version = cons.candidates[i].shazam_other_version;
+    let shazam_for_release = match (&result.shazam, other_version) {
+        (Some(s), true) => Some(ShazamEvidence { album: None, released: None, ..s.clone() }),
+        (s, _) => s.clone(),
+    };
+    let mut choice = release::choose(&recs, shazam_for_release.as_ref(), siblings);
 
     // Shazam's album missing in AcoustID's list (duplicate recordings) or a compilation:
     // look it up on MusicBrainz and check its tracklist
-    if matches!(choice.unclear, Some(Unclear::ShazamOtherAlbum) | Some(Unclear::OnlyCompilations)) {
+    if !other_version && matches!(choice.unclear, Some(Unclear::ShazamOtherAlbum) | Some(Unclear::OnlyCompilations)) {
         if let Some(s) = &result.shazam {
             let rec = &cons.recordings[i];
             let rec_title = rec.title.clone().unwrap_or_default();

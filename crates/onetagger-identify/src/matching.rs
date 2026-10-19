@@ -19,6 +19,10 @@ lazy_static::lazy_static! {
     static ref EDITION_SUFFIX: Regex = Regex::new(r"(?i)\s*(:|\s-\s|–)\s*[^:–]*(soundtrack|motion picture|music from|edition|remaster|deluxe|expanded|anniversary|the remixes)[^:–]*$").unwrap();
     /// Album names that are compilations / DJ series
     static ref COMPILATION_NAME: Regex = Regex::new(r"(?i)(\bbest of\b|\bgreatest\b|\bhits\b|\bcollection\b|\bessentials?\b|\banthology\b|\bstudio albums\b|\bbox set\b|\bthe singles\b|\bdefinitive\b|\bultimate\b|\bretrospective\b|\bclassics\b|\bpresents\b|\bdj tools\b|\bmixed by\b|\bsampler\b|\bvol(ume)?\.?\s*\d+|[a-z]\s+\d{1,3}$|\bnow\b.*\bmusic\b|\byears\b)").unwrap();
+    /// "(XY Remix)", "[Extended]", " - Radio Edit": the version part of a title
+    static ref VERSION_PART: Regex = Regex::new(r"(?i)(?:[\(\[]([^\)\]]*\b(?:remix|mix|edit|rework|bootleg|dub|vip|extended|version|rmx)\b[^\)\]]*)[\)\]]|\s-\s(.*\b(?:remix|mix|edit|rework|bootleg|dub|vip|extended|version|rmx)\b.*)$)").unwrap();
+    /// Versions that just mean "the normal one"
+    static ref DEFAULT_VERSION: Regex = Regex::new(r"^(original|original mix|original version|album version|single version|main version|main mix)$").unwrap();
     static ref EDITION: Regex = Regex::new(r"(?i)[\(\[][^\)\]]*(edition|version|remaster|deluxe|expanded|anniversary|bonus|special|explicit|clean|live|extended|tracks|soundtrack|remixes)[^\)\]]*[\)\]]").unwrap();
 }
 
@@ -54,6 +58,13 @@ pub fn core_album(album: &str) -> String {
 pub fn looks_like_compilation(album: &str) -> bool {
     let a = RELEASE_SUFFIX.replace_all(album, "");
     COMPILATION_NAME.is_match(a.trim())
+}
+
+/// Normalized version of a title ("yeux noir remix", "radio edit"); empty for the normal version
+pub fn version_tag(title: &str) -> String {
+    let Some(c) = VERSION_PART.captures(title) else { return String::new() };
+    let v = normalize(c.get(1).or(c.get(2)).map(|m| m.as_str()).unwrap_or_default());
+    if DEFAULT_VERSION.is_match(&v) { String::new() } else { v }
 }
 
 /// Album title for a MusicBrainz search: without edition brackets, feat. and " - Single" / " - EP"
@@ -228,6 +239,11 @@ mod tests {
         assert!(album_matches("Godzilla: King of the Monsters (Original Motion Picture Soundtrack)", "Godzilla: King of the Monsters: Original Motion Picture Soundtrack"));
         assert!(album_matches("Glorious (The Remixes) - EP", "Glorious"));
         assert!(looks_like_compilation("The Indispensable Collection"));
+        assert_ne!(version_tag("Drinkee (Yeux Noir remix)"), version_tag("Drinkee (Addal Remix)"));
+        assert_eq!(version_tag("Drinkee (Yeux Noir remix)"), version_tag("Drinkee (Yeux Noir Remix)"));
+        assert_eq!(version_tag("Paris (original mix)"), "");
+        assert_eq!(version_tag("Happier (feat. X) [Extended]"), "extended");
+        assert_eq!(version_tag("Bad Boy"), "");
         assert!(looks_like_compilation("Italian Hardstyle 14"));
         assert!(looks_like_compilation("Six Studio Albums"));
         assert!(looks_like_compilation("Best of the 90's"));
