@@ -23,6 +23,7 @@ class Settings {
     renamer: RenamerSettings = new RenamerSettings();
     quickTag: QuickTagSettings = new QuickTagSettings();
     audioFeatures: AudioFeaturesSettings = new AudioFeaturesSettings();
+    identify: any = null;
 
     tagEditorDouble: boolean = false;
     tagEditorCustom: string[] = [];

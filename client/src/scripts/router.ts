@@ -9,6 +9,7 @@ const AutotaggerStatus = () => import('../views/AutotaggerStatus.vue');
 const Autotagger = () => import('../views/Autotagger.vue');
 const QuickTag = () => import('../views/QuickTag.vue');
 const AudioFeatures = () => import('../views/AudioFeatures.vue');
+const Identify = () => import('../views/Identify.vue');
 
 const history = createWebHashHistory();
 
@@ -36,6 +37,10 @@ const routes = [
     {
         path: '/audiofeatures/status',
         component: AutotaggerStatus
+    },
+    {
+        path: '/identify',
+        component: Identify
     },
     {
         path: '/tageditor',

@@ -12,6 +12,7 @@ pub mod release;
 pub mod pipeline;
 pub mod journal;
 pub mod apply;
+pub mod runstate;
 
-pub use pipeline::{identify_file, run, IdentifyConfig, STOP};
+pub use pipeline::{identify_file, run, stop, IdentifyConfig, STOP};
 pub use types::*;

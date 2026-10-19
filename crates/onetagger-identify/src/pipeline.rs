@@ -26,8 +26,17 @@ lazy_static::lazy_static! {
 pub struct IdentifyConfig {
     pub acoustid_key: String,
     pub threads: usize,
-    /// Tag + move confirmed files right away
+    /// Target folder / template for applying (needed for manual apply too)
     pub apply: Option<ApplyConfig>,
+    /// Tag + move confirmed files right away
+    #[serde(default)]
+    pub auto_apply: bool,
+}
+
+/// Stop a running identify (also interrupts Shazam waits)
+pub fn stop() {
+    STOP.store(true, Ordering::SeqCst);
+    onetagger_autotag::STOP_TAGGING.store(true, Ordering::SeqCst);
 }
 
 /// Cached per-file Shazam result (keyed by file content), so a restart doesn't ask again
@@ -150,7 +159,16 @@ fn evaluate(result: &mut IdentifyResult, aid: &AcoustIdResponse, siblings: &Hash
     result.recordings = cons.candidates.clone();
     result.state = cons.state;
     result.reason = cons.reason.clone();
-    let Some(i) = cons.chosen else { return };
+    let Some(i) = cons.chosen else {
+        // Not confirmed: still offer the releases of the best fingerprint match for manual review
+        if let Some(j) = cons.candidates.iter().position(|c| c.duration_ok && c.score >= 0.5) {
+            let choice = release::choose(&[&cons.recordings[j]], result.shazam.as_ref(), siblings);
+            result.releases = choice.candidates;
+            result.release = choice.chosen;
+            result.recording = result.chosen_release().map(|r| r.recording_id.clone());
+        }
+        return;
+    };
 
     let recs: Vec<&crate::acoustid::AidRecording> = cons.equivalent.iter().map(|j| &cons.recordings[*j]).collect();
     let choice = release::choose(&recs, result.shazam.as_ref(), siblings);
@@ -180,13 +198,15 @@ pub fn new_journal(target: &Path) -> Result<Journal, Error> {
 }
 
 /// Identify files on worker threads; results stream back in completion order
-pub fn run(files: Vec<PathBuf>, config: IdentifyConfig) -> Result<Receiver<IdentifyResult>, Error> {
+pub fn run(files: Vec<PathBuf>, config: IdentifyConfig) -> Result<(Receiver<IdentifyResult>, Option<Arc<Journal>>), Error> {
     STOP.store(false, Ordering::SeqCst);
+    onetagger_autotag::STOP_TAGGING.store(false, Ordering::SeqCst);
     let journal = match &config.apply {
         Some(a) => Some(Arc::new(new_journal(&a.target)?)),
         None => None,
     };
     let (tx, rx) = unbounded();
+    let journal_out = journal.clone();
     let queue = Arc::new(Mutex::new(files.into_iter().rev().collect::<Vec<_>>()));
     let siblings: Arc<Mutex<HashMap<String, u32>>> = Arc::new(Mutex::new(HashMap::new()));
     for _ in 0..config.threads.max(1) {
@@ -198,11 +218,15 @@ pub fn run(files: Vec<PathBuf>, config: IdentifyConfig) -> Result<Receiver<Ident
             let Some(path) = queue.lock().unwrap().pop() else { break };
             let snapshot = siblings.lock().unwrap().clone();
             let mut result = identify_file(&path, &config, &snapshot);
+            // Interrupted by stop: not a result, will be redone next run
+            if STOP.load(Ordering::Relaxed) && result.state == IdentifyState::Error {
+                break;
+            }
             if result.state == IdentifyState::Confirmed {
                 if let Some(r) = result.chosen_release() {
                     *siblings.lock().unwrap().entry(r.release_group_id.clone()).or_insert(0) += 1;
                 }
-                if let (Some(apply_config), Some(journal)) = (&config.apply, &journal) {
+                if let (true, Some(apply_config), Some(journal)) = (config.auto_apply, &config.apply, &journal) {
                     match apply::apply(&result, apply_config, journal) {
                         Ok(dest) => result.applied = Some(dest),
                         Err(e) => {
@@ -218,5 +242,5 @@ pub fn run(files: Vec<PathBuf>, config: IdentifyConfig) -> Result<Receiver<Ident
             }
         });
     }
-    Ok(rx)
+    Ok((rx, journal_out))
 }

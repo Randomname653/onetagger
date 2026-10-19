@@ -73,18 +73,21 @@ impl Shazam {
         Ok((response.track, duration))
     }
 
-    /// Wait for a free request slot (global across threads)
-    fn wait_for_slot() {
-        let wait = {
+    /// Wait for a free request slot (global across threads), aborts when tagging is stopped
+    fn wait_for_slot() -> Result<(), Error> {
+        let slot = {
             let mut next = NEXT_REQUEST.lock().unwrap();
-            let now = Instant::now();
-            let slot = (*next).max(now);
+            let slot = (*next).max(Instant::now());
             *next = slot + REQUEST_INTERVAL;
-            slot - now
+            slot
         };
-        if !wait.is_zero() {
-            std::thread::sleep(wait);
+        while Instant::now() < slot {
+            if crate::STOP_TAGGING.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(anyhow!("Stopped"));
+            }
+            std::thread::sleep((slot - Instant::now()).min(Duration::from_millis(250)));
         }
+        Ok(())
     }
 
     /// Delay all future requests (rate limit hit)
@@ -100,7 +103,7 @@ impl Shazam {
         let mut cooldown = RATE_LIMIT_COOLDOWN;
 
         for attempt in 0..=MAX_RETRIES {
-            Self::wait_for_slot();
+            Self::wait_for_slot()?;
             let timestamp = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_millis() as u32;
             let body = json!({
                 "geolocation": { "altitude": 300, "latitude": 45, "longitude": 2 },

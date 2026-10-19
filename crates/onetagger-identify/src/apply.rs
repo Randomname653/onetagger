@@ -49,7 +49,8 @@ pub struct TrackTags {
 }
 
 fn s(v: &Value) -> Option<String> {
-    v.as_str().filter(|x| !x.is_empty()).map(String::from)
+    // MusicBrainz uses "[none]" for "no catalog number" etc.
+    v.as_str().filter(|x| !x.is_empty() && !x.starts_with('[')).map(String::from)
 }
 
 fn ids(credit: &Value) -> Vec<String> {
@@ -130,7 +131,8 @@ fn sanitize(input: &str) -> String {
 
 /// Destination path from template
 pub fn destination(config: &ApplyConfig, tags: &TrackTags, source: &Path) -> PathBuf {
-    let year = tags.date.clone().or(tags.original_date.clone()).unwrap_or_default().chars().take(4).collect::<String>();
+    // Year of the first release, not of a reissue
+    let year = tags.original_date.clone().or(tags.date.clone()).unwrap_or_default().chars().take(4).collect::<String>();
     let track = if tags.disc_total > 1 { format!("{}-{:02}", tags.disc, tags.track) } else { format!("{:02}", tags.track) };
     let rendered = config.template
         .replace("%albumartist%", &tags.album_artist)
@@ -208,6 +210,8 @@ pub fn write_tags(path: &Path, tags: &TrackTags, cover: Option<Vec<u8>>, kept: V
     let mut wrap = Tag::load_file(path, true)?;
     wrap.set_separators(&TagSeparators { id3: "; ".into(), vorbis: None, mp4: "; ".into() });
     let format = wrap.format();
+    let is_id3 = matches!(wrap, Tag::ID3(_));
+    let is_vorbis = matches!(wrap, Tag::FLAC(_) | Tag::Vorbis(_));
     if let Tag::ID3(t) = &mut wrap {
         t.set_id3v24(true);
     }
@@ -241,12 +245,22 @@ pub fn write_tags(path: &Path, tags: &TrackTags, cover: Option<Vec<u8>>, kept: V
     if let Some(d) = tags.date.as_deref().and_then(tag_date) {
         t.set_date(&d, true);
     }
-    if let Some(d) = tags.original_date.as_deref().and_then(tag_date) {
-        t.set_publish_date(&d, true);
+    if let Some(d) = &tags.original_date {
+        if is_id3 {
+            t.set_raw("TDOR", vec![d.clone()], true);
+        } else if let Some(d) = tag_date(d) {
+            t.set_publish_date(&d, true);
+        }
     }
     t.set_track_number(&tags.track.to_string(), Some(tags.track_total as u16), true);
     t.set_field(Field::DiscNumber, vec![tags.disc.to_string()], true);
-    if let Some(l) = &tags.label { t.set_field(Field::Label, vec![l.clone()], true); }
+    if let Some(l) = &tags.label {
+        t.set_field(Field::Label, vec![l.clone()], true);
+        if is_vorbis {
+            // Picard writes LABEL, OneTagger's Field::Label is PUBLISHER
+            t.set_raw("LABEL", vec![l.clone()], true);
+        }
+    }
     if let Some(c) = &tags.catalog_number { t.set_field(Field::CatalogNumber, vec![c.clone()], true); }
     if let Some(i) = &tags.isrc { t.set_field(Field::ISRC, vec![i.clone()], true); }
     if !tags.genres.is_empty() { t.set_field(Field::Genre, tags.genres.clone(), true); }

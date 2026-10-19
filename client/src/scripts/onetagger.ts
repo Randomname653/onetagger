@@ -104,6 +104,7 @@ class OneTagger {
     onQuickTagBrowserEvent(_: any) {}
     onTagEditorEvent(_: any) {}
     onAudioFeaturesEvent(_: any) {}
+    onIdentifyEvent(_: any) {}
     onRenamerEvent(_: any) {}
     onFolderBrowserEvent(_: any) {}
     // =======================
@@ -186,6 +187,15 @@ class OneTagger {
             // Path selected
             case 'browse':
                 this.onBrowse(json);
+                break;
+            // Identify
+            case 'identifyStarted':
+            case 'identifyStatus':
+            case 'identifyLoaded':
+            case 'identifyApplied':
+            case 'identifyJournals':
+            case 'identifyUndone':
+                this.onIdentifyEvent(json);
                 break;
             // Error
             case 'error':
@@ -371,6 +381,9 @@ class OneTagger {
                     case 'audiofeatures':
                         this.onAudioFeaturesEvent(json);
                         break;
+                    case 'identify':
+                        this.onIdentifyEvent({ ...json, context: 'id' });
+                        break;
                     case 'tageditor':
                         this.onTagEditorEvent(json);
                         break;
@@ -460,6 +473,9 @@ class OneTagger {
         // Audio features path
         if (json.context == 'af')
             this.onAudioFeaturesEvent(json);
+        // Identify source / target
+        if (json.context == 'id' || json.context == 'idTarget')
+            this.onIdentifyEvent(json);
         // Tag editor
         if (json.context == 'te')
             this.onTagEditorEvent(json);

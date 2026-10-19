@@ -3660,6 +3660,7 @@ dependencies = [
  "mime",
  "mime_guess",
  "onetagger-autotag",
+ "onetagger-identify",
  "onetagger-platforms",
  "onetagger-player",
  "onetagger-playlist",

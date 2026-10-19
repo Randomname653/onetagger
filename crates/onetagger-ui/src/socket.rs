@@ -79,6 +79,15 @@ enum Action {
 
     ManualTag { config: TaggerConfig, path: PathBuf },
     ManualTagApply { matches: Vec<TrackMatch>, path: PathBuf, config: TaggerConfig },
+
+    IdentifyStart { config: IdentifyUiConfig },
+    IdentifyStatus { since: usize },
+    IdentifyStop,
+    IdentifyLoadLast,
+    IdentifyApply { index: usize, release: usize, config: IdentifyUiConfig },
+    IdentifySkip { index: usize },
+    IdentifyJournals { target: String },
+    IdentifyUndo { journal: PathBuf },
 }
 
 
@@ -87,6 +96,40 @@ enum Action {
 enum TaggerConfigs {
     AutoTagger(TaggerConfig), 
     AudioFeatures(AudioFeaturesConfig)
+}
+
+/// Identify settings from the UI
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IdentifyUiConfig {
+    path: String,
+    include_subfolders: bool,
+    acoustid_key: String,
+    threads: usize,
+    auto_apply: bool,
+    target: String,
+    template: String,
+}
+
+impl IdentifyUiConfig {
+    fn apply_config(&self) -> Option<onetagger_identify::apply::ApplyConfig> {
+        if self.target.trim().is_empty() {
+            return None;
+        }
+        Some(onetagger_identify::apply::ApplyConfig {
+            target: PathBuf::from(self.target.trim()),
+            template: if self.template.trim().is_empty() { onetagger_identify::apply::DEFAULT_TEMPLATE.to_string() } else { self.template.clone() },
+        })
+    }
+
+    fn identify_config(&self) -> onetagger_identify::IdentifyConfig {
+        onetagger_identify::IdentifyConfig {
+            acoustid_key: self.acoustid_key.trim().to_string(),
+            threads: self.threads.clamp(1, 8),
+            apply: self.apply_config(),
+            auto_apply: self.auto_apply,
+        }
+    }
 }
 
 impl TaggerConfigs {
@@ -619,6 +662,56 @@ async fn handle_message(text: &str, websocket: &mut WebSocket, context: &mut Soc
             })).await.ok();
         },
         // Apply the tags from manual tagger
+        Action::IdentifyStart { config } => {
+            if config.acoustid_key.trim().is_empty() {
+                return Err(anyhow!("AcoustID API key missing"));
+            }
+            if config.auto_apply && config.apply_config().is_none() {
+                return Err(anyhow!("Target folder missing"));
+            }
+            let path = config.path.clone();
+            let subfolders = config.include_subfolders;
+            let files = tokio::task::spawn_blocking(move || AudioFileInfo::get_file_list(&path, subfolders)).await?;
+            info!("Identify starting: {} files, config: {:?}", files.len(), IdentifyUiConfig { acoustid_key: "***".into(), ..config.clone() });
+            onetagger_identify::runstate::start(files, config.identify_config())?;
+            send_socket(websocket, json!({ "action": "identifyStarted" })).await.ok();
+        },
+        Action::IdentifyStatus { since } => {
+            send_socket(websocket, json!({
+                "action": "identifyStatus",
+                "status": onetagger_identify::runstate::status(since)
+            })).await.ok();
+        },
+        Action::IdentifyStop => onetagger_identify::stop(),
+        Action::IdentifyLoadLast => {
+            let count = tokio::task::spawn_blocking(onetagger_identify::runstate::load_last).await??;
+            send_socket(websocket, json!({ "action": "identifyLoaded", "count": count })).await.ok();
+        },
+        Action::IdentifyApply { index, release, config } => {
+            let apply = config.apply_config().ok_or(anyhow!("Target folder missing"))?;
+            let r = tokio::task::spawn_blocking(move || onetagger_identify::runstate::apply_one(index, release, apply)).await?;
+            send_socket(websocket, json!({
+                "action": "identifyApplied",
+                "index": index,
+                "path": r.as_ref().ok(),
+                "error": r.as_ref().err().map(|e| e.to_string()),
+            })).await.ok();
+        },
+        Action::IdentifySkip { index } => onetagger_identify::runstate::skip(index),
+        Action::IdentifyJournals { target } => {
+            send_socket(websocket, json!({
+                "action": "identifyJournals",
+                "journals": onetagger_identify::runstate::journals(Path::new(&target))
+            })).await.ok();
+        },
+        Action::IdentifyUndo { journal } => {
+            let r = tokio::task::spawn_blocking(move || onetagger_identify::runstate::undo(&journal)).await??;
+            send_socket(websocket, json!({
+                "action": "identifyUndone",
+                "restored": r.0,
+                "errors": r.1,
+            })).await.ok();
+        },
         Action::ManualTagApply { matches, path, config } => {
             match onetagger_autotag::manual_tagger_apply(matches, path, &config) {
                 Ok(_) => {

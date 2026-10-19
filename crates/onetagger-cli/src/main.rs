@@ -162,7 +162,8 @@ fn main() {
                 target: t.clone(),
                 template: template.clone().unwrap_or(onetagger_identify::apply::DEFAULT_TEMPLATE.to_string()),
             });
-            let rx = onetagger_identify::run(files, onetagger_identify::IdentifyConfig { acoustid_key: key, threads: *threads, apply })
+            let auto_apply = apply.is_some();
+            let (rx, _) = onetagger_identify::run(files, onetagger_identify::IdentifyConfig { acoustid_key: key, threads: *threads, apply, auto_apply })
                 .expect("Failed starting identify");
             let mut results = vec![];
             for (i, r) in rx.into_iter().enumerate() {
