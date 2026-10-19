@@ -87,7 +87,9 @@ SongRec (Shazam support) - https://github.com/marin-m/SongRec
 Chromaprint (fingerprint, via [rusty-chromaprint](https://crates.io/crates/rusty-chromaprint)), [AcoustID](https://acoustid.org), [MusicBrainz](https://musicbrainz.org) and the [Cover Art Archive](https://coverartarchive.org) - Identify
 
 ## Support
-You can support this project by donating on [PayPal](https://paypal.me/marekkon5) or [Patreon](https://www.patreon.com/onetagger)
+You can support the original OneTagger project by donating on [PayPal](https://paypal.me/marekkon5) or [Patreon](https://www.patreon.com/onetagger).
+
+**Note:** these donations go to the original author of OneTagger (Marekkon5), not to this fork. The last upstream release is 1.7.0 from 2023.
 
 ## Compilling
 
