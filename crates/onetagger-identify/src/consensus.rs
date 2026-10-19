@@ -1,7 +1,7 @@
 //! Decide which recording a file is: AcoustID and Shazam must agree
 use std::collections::HashMap;
 use crate::acoustid::{artist_credit, AcoustIdResponse, AidRecording};
-use crate::matching::{artist_similarity, hard_versions, title_similarity};
+use crate::matching::{artist_similarity, featured_artists, hard_versions, title_similarity};
 use crate::musicbrainz;
 use crate::types::{IdentifyState, RecordingCandidate, ShazamEvidence};
 
@@ -10,6 +10,8 @@ pub const MIN_ACOUSTID_SCORE: f64 = 0.80;
 /// Lower score still shown as evidence
 const MIN_LISTED_SCORE: f64 = 0.50;
 const TITLE_THRESHOLD: f64 = 0.85;
+/// Fingerprint score needed for the live rule
+const LIVE_RULE_SCORE: f64 = 0.90;
 const ARTIST_THRESHOLD: f64 = 0.70;
 /// How many candidates may cost a MusicBrainz ISRC lookup
 const MAX_ISRC_LOOKUPS: usize = 3;
@@ -44,6 +46,22 @@ fn versions_compatible(shazam_title: &str, rec: &AidRecording) -> bool {
     }
     let rec = rec_versions;
     hard_versions(shazam_title).iter().all(|v| rec.contains(v))
+}
+
+/// Shazam names a live version, the fingerprint matched a studio recording and nothing else differs
+fn only_live_differs(shazam_title: &str, rec: &AidRecording) -> bool {
+    let rec_versions = hard_versions(rec.title.as_deref().unwrap_or_default());
+    let missing: Vec<String> = hard_versions(shazam_title).into_iter().filter(|v| !rec_versions.contains(v)).collect();
+    missing == vec!["live".to_string()]
+}
+
+/// Best artist match incl. artists credited as "feat." in either title
+fn artist_match(shazam: &ShazamEvidence, artist: &str, title: &str) -> f64 {
+    let mut shazam_names = vec![shazam.artist.clone()];
+    shazam_names.extend(featured_artists(&shazam.title));
+    let mut rec_names = vec![artist.to_string()];
+    rec_names.extend(featured_artists(title));
+    shazam_names.iter().flat_map(|a| rec_names.iter().map(move |b| artist_similarity(a, b))).fold(0.0, f64::max)
 }
 
 pub fn evaluate(file_duration: u32, aid: &AcoustIdResponse, shazam: Option<&ShazamEvidence>) -> Consensus {
@@ -82,11 +100,18 @@ pub fn evaluate(file_duration: u32, aid: &AcoustIdResponse, shazam: Option<&Shaz
         };
         if let Some(s) = shazam {
             let ts = title_similarity(&s.title, &title);
-            let as_ = artist_similarity(&s.artist, &artist);
+            let as_ = artist_match(s, &artist, &title);
             let versions = versions_compatible(&s.title, rec);
-            if ts >= TITLE_THRESHOLD && as_ >= ARTIST_THRESHOLD && versions {
+            let same_song = ts >= TITLE_THRESHOLD && as_ >= ARTIST_THRESHOLD;
+            if same_song && versions {
                 c.shazam_agrees = true;
                 c.note = format!("Shazam stimmt überein (Titel {:.0}%, Interpret {:.0}%)", ts * 100.0, as_ * 100.0);
+            } else if same_song && only_live_differs(&s.title, rec) && *score >= LIVE_RULE_SCORE
+                && rec.duration.is_some() && c.duration_ok {
+                // Live rule: same song, only Shazam says live. The fingerprint is version specific
+                // and the length matches the studio recording, so AcoustID decides the version.
+                c.shazam_agrees = true;
+                c.note = format!("Gleicher Song; Shazam nennt eine Live-Version, Fingerprint ({:.2}) und Dauer passen zur Studioaufnahme", score);
             } else if let (Some(isrc), true) = (&s.isrc, *score >= MIN_ACOUSTID_SCORE && isrc_lookups < MAX_ISRC_LOOKUPS) {
                 // Different spelling / language: same ISRC proves the same recording
                 isrc_lookups += 1;

@@ -12,12 +12,26 @@ pub struct ReleaseChoice {
     /// Safe to apply without review
     pub clear: bool,
     pub reason: String,
+    /// Why it is not clear
+    pub unclear: Option<Unclear>,
 }
 
-const SECONDARY_BAD: [&str; 4] = ["Compilation", "DJ-mix", "Mixtape/Street", "Remix"];
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unclear {
+    NoRelease,
+    OnlyCompilations,
+    ShazamOtherAlbum,
+    TrackUnknown,
+    Tie,
+}
 
-fn group_score(kind: Option<&str>, secondary: &[String], live_recording: bool, remix_recording: bool) -> (i32, &'static str) {
+pub(crate) const SECONDARY_BAD: [&str; 4] = ["Compilation", "DJ-mix", "Mixtape/Street", "Remix"];
+
+pub(crate) fn group_score(kind: Option<&str>, secondary: &[String], live_recording: bool, remix_recording: bool) -> (i32, &'static str) {
     let has = |s: &str| secondary.iter().any(|x| x == s);
+    if has("Interview") || has("Spokenword") || has("Audiobook") {
+        return (-40, "Interview/Wortbeitrag");
+    }
     if has("Live") && !live_recording {
         return (-30, "Live-Release, Aufnahme ist nicht live");
     }
@@ -149,7 +163,7 @@ fn decide(mut candidates: Vec<ReleaseCandidate>, shazam_named: HashSet<String>, 
         .then(a.date.clone().unwrap_or("9999".into()).cmp(&b.date.clone().unwrap_or("9999".into()))));
 
     let Some(best) = candidates.first() else {
-        return ReleaseChoice { candidates, chosen: None, clear: false, reason: "AcoustID kennt kein Release dieser Aufnahme".into() };
+        return ReleaseChoice { candidates, chosen: None, clear: false, reason: "AcoustID kennt kein Release dieser Aufnahme".into(), unclear: Some(Unclear::NoRelease) };
     };
     // Below a plain single: only compilations, mixes and the like
     let best_is_compilation = best.score < 20;
@@ -157,17 +171,18 @@ fn decide(mut candidates: Vec<ReleaseCandidate>, shazam_named: HashSet<String>, 
     let year = |c: &ReleaseCandidate| c.date.clone().unwrap_or_default().chars().take(4).collect::<String>();
     let tie = candidates.get(1).map(|second| second.score == best.score && year(second) == year(best)).unwrap_or(false);
 
-    let (clear, reason) = if best_is_compilation && !named {
-        (false, "Kein Album/Single, nur Compilations oder Mixe, und Shazam nennt keins davon".to_string())
+    let (unclear, reason) = if best_is_compilation && !named {
+        (Some(Unclear::OnlyCompilations), "Kein Album/Single, nur Compilations oder Mixe, und Shazam nennt keins davon".to_string())
     } else if let (Some(album), false) = (&shazam_album, named) {
         // Zero trust: both sources have to agree on the album too
-        (false, format!("Shazam nennt ein anderes Album („{album}“) als „{}“", best.title))
+        (Some(Unclear::ShazamOtherAlbum), format!("Shazam nennt ein anderes Album („{album}“) als „{}“", best.title))
     } else if best.track.is_none() {
-        (false, format!("Trackposition auf „{}“ unbekannt", best.title))
+        (Some(Unclear::TrackUnknown), format!("Trackposition auf „{}“ unbekannt", best.title))
     } else if tie {
-        (false, format!("Gleichwertige Releases im selben Jahr: „{}“ / „{}“", best.title, candidates[1].title))
+        (Some(Unclear::Tie), format!("Gleichwertige Releases im selben Jahr: „{}“ / „{}“", best.title, candidates[1].title))
     } else {
-        (true, format!("„{}“ ({})", best.title, best.reasons.join(", ")))
+        (None, format!("„{}“ ({})", best.title, best.reasons.join(", ")))
     };
-    ReleaseChoice { chosen: Some(0), clear, reason, candidates }
+    let clear = unclear.is_none();
+    ReleaseChoice { chosen: Some(0), clear, reason, candidates, unclear }
 }

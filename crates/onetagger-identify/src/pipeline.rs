@@ -13,7 +13,9 @@ use crate::fingerprint;
 use crate::http;
 use crate::matching::{album_similarity, title_similarity};
 use crate::types::*;
-use crate::{consensus, release};
+use crate::{consensus, release, shazam_album};
+use crate::release::Unclear;
+use crate::matching::hard_versions;
 use crate::apply::{self, ApplyConfig};
 use crate::journal::Journal;
 
@@ -166,12 +168,59 @@ fn evaluate(result: &mut IdentifyResult, aid: &AcoustIdResponse, siblings: &Hash
             result.releases = choice.candidates;
             result.release = choice.chosen;
             result.recording = result.chosen_release().map(|r| r.recording_id.clone());
+        } else if let Some(s) = &result.shazam {
+            // Only Shazam knows it: suggest releases via its ISRC (still needs review)
+            result.releases = shazam_album::isrc_suggestions(s, result.duration);
+            if !result.releases.is_empty() {
+                result.release = Some(0);
+                result.recording = Some(result.releases[0].recording_id.clone());
+                result.reason = format!("{} – Vorschläge über Shazams ISRC", result.reason);
+            }
         }
         return;
     };
 
     let recs: Vec<&crate::acoustid::AidRecording> = cons.equivalent.iter().map(|j| &cons.recordings[*j]).collect();
-    let choice = release::choose(&recs, result.shazam.as_ref(), siblings);
+    let mut choice = release::choose(&recs, result.shazam.as_ref(), siblings);
+
+    // Shazam's album missing in AcoustID's list (duplicate recordings) or a compilation:
+    // look it up on MusicBrainz and check its tracklist
+    if matches!(choice.unclear, Some(Unclear::ShazamOtherAlbum) | Some(Unclear::OnlyCompilations)) {
+        if let Some(s) = &result.shazam {
+            let rec = &cons.recordings[i];
+            let rec_title = rec.title.clone().unwrap_or_default();
+            let live = hard_versions(&rec_title).iter().any(|v| v == "live")
+                || (!rec.releasegroups.is_empty() && rec.releasegroups.iter().all(|g| g.secondarytypes.iter().any(|x| x == "Live")));
+            match shazam_album::find(&rec_title, live, result.duration, s) {
+                shazam_album::Lookup::Found(found) => {
+                    let ours_complete = choice.candidates.first().map(|c| c.track.is_some()).unwrap_or(false);
+                    if found.compilation && choice.unclear == Some(Unclear::ShazamOtherAlbum) && ours_complete {
+                        // Shazam named a compilation that has the song: no objection to the original
+                        choice.reason = format!("„{}“ (Shazams „{}“ ist eine Compilation)", choice.candidates[0].title, found.candidate.title);
+                    } else {
+                        // Original album/single found via Shazam, or Shazam names the only compilation
+                        choice.reason = format!("„{}“ (über Shazams Album bei MusicBrainz gefunden)", found.candidate.title);
+                        choice.candidates.retain(|c| c.release_group_id != found.candidate.release_group_id);
+                        choice.candidates.insert(0, found.candidate);
+                        choice.chosen = Some(0);
+                    }
+                    choice.clear = true;
+                    choice.unclear = None;
+                },
+                // Shazam's album only has another edit of the song, our recording matches the file length
+                // Only for a plain studio album / EP / single: live or special releases stay in review
+                shazam_album::Lookup::OtherVersion(title) if choice.unclear == Some(Unclear::ShazamOtherAlbum)
+                    && choice.candidates.first().map(|c| c.track.is_some() && c.secondary.is_empty()
+                        && matches!(c.kind.as_deref(), Some("Album") | Some("EP") | Some("Single"))).unwrap_or(false) => {
+                    choice.reason = format!("„{}“ (auf Shazams „{title}“ steht eine andere Länge des Songs)", choice.candidates[0].title);
+                    choice.clear = true;
+                    choice.unclear = None;
+                },
+                _ => {}
+            }
+        }
+    }
+
     result.releases = choice.candidates;
     result.release = choice.chosen;
     result.recording = result.chosen_release().map(|r| r.recording_id.clone()).or(Some(cons.recordings[i].id.clone()));

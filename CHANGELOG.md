@@ -26,6 +26,22 @@ lossless undo. See the README for the rules and the reasoning behind them.
 - Throttled and disk cached clients for AcoustID (3/s), MusicBrainz (1/s) and Cover Art Archive
 
 
+### Identify: fewer files in review
+Measured on a real review list: about 20 % of the review items are now confirmed, without
+loosening the rule that AcoustID and Shazam must agree.
+- **Shazam's album on MusicBrainz:** AcoustID only lists releases linked to the exact recording ID
+  and MusicBrainz has many unmerged duplicate recordings, so the album Shazam names was often
+  missing. It is now looked up on MusicBrainz and its tracklist checked for the song with a
+  matching length. If Shazam's album is a compilation that contains the song, the original release
+  is kept. If the album only has the song in another length (another edit), that is no objection
+  to a plain studio album / EP / single that matches the file length.
+- **Live rule:** same title and artist, only Shazam names a live version: AcoustID decides when the
+  fingerprint score is at least 0.90 and the length matches the studio recording.
+- Artists credited as "feat." in a title count for the artist comparison; a leading "The" in
+  titles is ignored.
+- Interview / spoken word releases are no longer chosen as the album.
+- Review dialog: files only Shazam knows get release suggestions via Shazam's ISRC.
+
 ### Fork maintenance
 - Weekly GitHub Action (`.github/workflows/upstream-sync.yml`): updates the upstream status line in
   the README and merges new upstream commits. Conflicting upstream changes are never pushed to

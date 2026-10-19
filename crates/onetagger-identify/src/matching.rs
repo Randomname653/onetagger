@@ -5,6 +5,8 @@ use unidecode::unidecode;
 
 lazy_static::lazy_static! {
     static ref FEAT: Regex = Regex::new(r"(?i)[\(\[]?\b(feat|ft|featuring)\b\.?.*?([\)\]]|$)").unwrap();
+    static ref FEAT_NAMES: Regex = Regex::new(r"(?i)\b(?:feat|ft|featuring)\b\.?\s+([^\)\]]+)").unwrap();
+    static ref LEADING_THE: Regex = Regex::new(r"^the\s+").unwrap();
     static ref BRACKETS: Regex = Regex::new(r"[\(\[][^\)\]]*[\)\]]").unwrap();
     /// "Title -JP ver.-" style suffix
     static ref DASH_SUFFIX: Regex = Regex::new(r"\s-[^-]+-\s*$").unwrap();
@@ -33,7 +35,7 @@ pub fn core_title(title: &str) -> String {
     let t = DASH_SUFFIX.replace_all(&t, "");
     // "Song - Live at X" style suffix
     let t = t.split(" - ").next().unwrap_or(&t).to_string();
-    normalize(&t)
+    LEADING_THE.replace(&normalize(&t), "").to_string()
 }
 
 /// Album title without edition / remaster noise and " - EP" / " - Single" suffixes
@@ -41,6 +43,18 @@ pub fn core_album(album: &str) -> String {
     let a = FEAT.replace_all(album, "");
     let a = EDITION.replace_all(&a, "");
     normalize(&RELEASE_SUFFIX.replace_all(&a, ""))
+}
+
+/// Album title for a MusicBrainz search: without edition brackets, feat. and " - Single" / " - EP"
+pub fn album_for_search(album: &str) -> String {
+    let a = FEAT.replace_all(album, "");
+    let a = EDITION.replace_all(&a, "");
+    RELEASE_SUFFIX.replace_all(&a, "").trim().to_string()
+}
+
+/// Artists mentioned as "feat. X" in a title
+pub fn featured_artists(title: &str) -> Vec<String> {
+    FEAT_NAMES.captures_iter(title).filter_map(|c| c.get(1)).map(|m| m.as_str().trim().to_string()).filter(|s| !s.is_empty()).collect()
 }
 
 /// Shorter forms of an album title: parts around ':' / ',' and without a trailing volume / number
@@ -173,6 +187,9 @@ mod tests {
         assert!(hard_versions("Bad Boy (radio mix)").is_empty());
         assert!(title_similarity("Message to B.A.", "Message To B.A.") > 0.99);
         assert_eq!(core_title("STAY -JP ver.-"), "stay");
+        assert_eq!(core_title("The Two"), core_title("Two"));
+        assert_eq!(featured_artists("Crush (Las Salinas Remix) [feat. Second Sun]"), vec!["Second Sun"]);
+        assert_eq!(album_for_search("Go Mental (feat. Big Narstie) - Single"), "Go Mental");
     }
 
     #[test]

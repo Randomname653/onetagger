@@ -9,6 +9,7 @@ pub mod matching;
 pub mod types;
 pub mod consensus;
 pub mod release;
+pub mod shazam_album;
 pub mod pipeline;
 pub mod journal;
 pub mod apply;
