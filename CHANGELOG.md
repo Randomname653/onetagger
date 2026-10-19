@@ -26,6 +26,12 @@ lossless undo. See the README for the rules and the reasoning behind them.
 - Throttled and disk cached clients for AcoustID (3/s), MusicBrainz (1/s) and Cover Art Archive
 
 
+### Fork maintenance
+- Weekly GitHub Action (`.github/workflows/upstream-sync.yml`): updates the upstream status line in
+  the README and merges new upstream commits. Conflicting upstream changes are never pushed to
+  master automatically; a pull request from the `upstream-master` branch is opened instead.
+
+
 # 1.7.0
 **(03.08.2023)**
 

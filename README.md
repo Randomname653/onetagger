@@ -89,7 +89,8 @@ Chromaprint (fingerprint, via [rusty-chromaprint](https://crates.io/crates/rusty
 ## Support
 You can support the original OneTagger project by donating on [PayPal](https://paypal.me/marekkon5) or [Patreon](https://www.patreon.com/onetagger).
 
-**Note:** these donations go to the original author of OneTagger (Marekkon5), not to this fork. The last upstream release is 1.7.0 from 2023.
+**Note:** these donations go to the original author of OneTagger (Marekkon5), not to this fork.
+<!-- upstream-status -->Last upstream release: 1.7.0 (2023-08-03), last upstream commit: 2026-02-13.<!-- /upstream-status -->
 
 ## Compilling
 

@@ -1,0 +1,31 @@
+name: Upstream sync
+
+# Weekly: update the upstream status in the README and merge new upstream commits.
+# Conflicting upstream changes are never pushed to master, a pull request is opened instead.
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    if: github.repository != 'Marekkon5/onetagger'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        ref: master
+        fetch-depth: 0
+
+    - name: Sync with upstream
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        bash .github/scripts/upstream-sync.sh
