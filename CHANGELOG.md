@@ -1,3 +1,31 @@
+# Fork changes
+**(19.10.2026, on top of upstream master)**
+
+### Shazam fix
+Shazam answers with HTTP 429 and an HTML page after about 20 requests in quick succession.
+OneTagger parsed that page as JSON, so every following track failed with
+`error decoding response body: expected value at line 1 column 1` (also seen in upstream issues
+#441 and #462).
+- Shazam requests are throttled globally to one every 3.2 s (about 3 s is sustainable in tests)
+- On 429 / server errors all threads pause with exponential backoff and retry instead of failing
+- Results are cached per file, so each platform no longer recognizes the same file again
+- Responses without a match (no `timestamp` field) are handled as "no match" instead of an error
+- Stop interrupts waits for the Shazam rate limit immediately
+- Beatport search errors now show the HTTP status. The search page currently answers OneTagger's
+  client with a Cloudflare challenge (403); this is reported, not worked around.
+  Beatsource has been merged into Beatport and no longer works as a source.
+
+### New: Identify tab
+Zero trust identification by audio fingerprint (AcoustID) and Shazam, release choice from
+MusicBrainz, automatic tagging and moving of confirmed files, review list for the rest and
+lossless undo. See the README for the rules and the reasoning behind them.
+- New crate `onetagger-identify` and CLI commands `identify` / `identify-undo`
+- Pure Rust Chromaprint fingerprint, fed at the native sample rate like `fpcalc`
+  (resampling beforehand changed the fingerprint enough to miss many AcoustID matches)
+- Releases of unmerged duplicate recordings on MusicBrainz are evaluated together
+- Throttled and disk cached clients for AcoustID (3/s), MusicBrainz (1/s) and Cover Art Archive
+
+
 # 1.7.0
 **(03.08.2023)**
 
