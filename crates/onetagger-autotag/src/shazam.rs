@@ -42,14 +42,23 @@ impl Shazam {
             return cached.clone().ok_or(anyhow!("Shazam returned no matches!"));
         }
 
-        // Load file
-        let source = AudioSources::from_path(path)?;
+        let (track, duration) = Self::recognize_at(path, 0.5)?;
+        let result = track.map(|t| (t, duration));
+        CACHE.lock().unwrap().insert(path.to_owned(), result.clone());
+        result.ok_or(anyhow!("Shazam returned no matches!"))
+    }
+
+    /// Recognize a 12s window centered at `position` (0.0 - 1.0 of the duration), uncached.
+    /// Returns the track (None if Shazam has no match) and the file duration in ms
+    pub fn recognize_at(path: impl AsRef<Path>, position: f64) -> Result<(Option<ShazamTrack>, u128), Error> {
+        let source = AudioSources::from_path(path.as_ref())?;
         let duration = source.duration();
         let conv = UniformSourceIterator::new(source.get_source()?, 1, 16000);
-        // Get 12s part from middle
         let buffer = if duration >= 12000 {
-            // ((duration / 1000) * 16KHz) / 2 (half duration) - (6 * 16KHz) seconds.
-            conv.skip((duration * 8 - 96000) as usize).take(16000 * 12).collect::<Vec<i16>>()
+            // Window start in samples (16 kHz), clamped so the 12s window fits
+            let center = (duration as f64 * position.clamp(0.0, 1.0)) as u128;
+            let start_ms = center.saturating_sub(6000).min(duration - 12000);
+            conv.skip((start_ms * 16) as usize).take(16000 * 12).collect::<Vec<i16>>()
         } else {
             conv.collect::<Vec<i16>>()
         };
@@ -61,9 +70,7 @@ impl Shazam {
             .join()
             .unwrap();
         let response = Self::recognize_signature(&signature)?;
-        let result = response.track.map(|t| (t, duration));
-        CACHE.lock().unwrap().insert(path.to_owned(), result.clone());
-        result.ok_or(anyhow!("Shazam returned no matches!"))
+        Ok((response.track, duration))
     }
 
     /// Wait for a free request slot (global across threads)
@@ -170,6 +177,16 @@ pub struct ShazamTrack {
     /// Artist
     pub subtitle: String,
     pub url: String,
+}
+
+impl ShazamTrack {
+    /// Value from the song metadata section (Album, Label, Released)
+    pub fn metadata(&self, title: &str) -> Option<&str> {
+        self.sections.iter().find_map(|s| match s {
+            ShazamSection::MetaSection { metadata } => metadata.iter().find(|m| m.title == title).map(|m| m.text.as_str()),
+            _ => None
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

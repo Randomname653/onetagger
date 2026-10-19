@@ -20,6 +20,7 @@ onetagger-autotag = { path = "../onetagger-autotag" }
 onetagger-renamer = { path = "../onetagger-renamer" }
 onetagger-playlist = { path = "../onetagger-playlist" }
 onetagger-platforms = { path = "../onetagger-platforms" }
+onetagger-identify = { path = "../onetagger-identify" }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"

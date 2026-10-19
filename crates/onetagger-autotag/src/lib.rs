@@ -28,7 +28,7 @@ use onetagger_player::AudioSources;
 use onetagger_tagger::{Track, AudioFileInfo, TaggerConfig, StylesOptions, AutotaggerSource, AutotaggerSourceBuilder};
 
 use crate::shazam::Shazam;
-mod shazam;
+pub mod shazam;
 
 pub mod repo;
 pub mod platforms;

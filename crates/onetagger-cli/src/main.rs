@@ -141,6 +141,41 @@ fn main() {
 
             renamer.rename(&names, &config).expect("Failed renaming!");
         },
+        Actions::IdentifyUndo { journal } => {
+            let (ok, errors) = onetagger_identify::journal::undo(journal).expect("Failed reading journal");
+            println!("Restored {ok} files, {} errors", errors.len());
+            for e in errors {
+                println!("  {e}");
+            }
+        },
+        Actions::Identify { path, acoustid_key, threads, report, target, template } => {
+            let key = acoustid_key.clone().or(std::env::var("ACOUSTID_KEY").ok()).expect("AcoustID key missing (--acoustid-key or ACOUSTID_KEY)");
+            let files: Vec<PathBuf> = if path.is_file() {
+                std::fs::read_to_string(path).expect("Failed reading file list")
+                    .lines().map(|l| l.trim().trim_start_matches('\u{feff}')).filter(|l| !l.is_empty()).map(PathBuf::from).collect()
+            } else {
+                AudioFileInfo::get_file_list(&path, true)
+            };
+            let total = files.len();
+            info!("Identifying {total} files");
+            let apply = target.as_ref().map(|t| onetagger_identify::apply::ApplyConfig {
+                target: t.clone(),
+                template: template.clone().unwrap_or(onetagger_identify::apply::DEFAULT_TEMPLATE.to_string()),
+            });
+            let rx = onetagger_identify::run(files, onetagger_identify::IdentifyConfig { acoustid_key: key, threads: *threads, apply })
+                .expect("Failed starting identify");
+            let mut results = vec![];
+            for (i, r) in rx.into_iter().enumerate() {
+                println!("[{}/{total}] {:?} {:?}: {}{}", i + 1, r.state, r.path.file_name().unwrap_or_default(), r.reason,
+                    r.applied.as_ref().map(|p| format!(" => {}", p.display())).unwrap_or_default());
+                results.push(r);
+            }
+            std::fs::write(report, serde_json::to_string_pretty(&results).unwrap()).expect("Failed writing report");
+            let count = |s| results.iter().filter(|r| r.state == s).count();
+            println!("Confirmed {}, Review {}, Unknown {}, Error {}",
+                count(onetagger_identify::IdentifyState::Confirmed), count(onetagger_identify::IdentifyState::Review),
+                count(onetagger_identify::IdentifyState::Unknown), count(onetagger_identify::IdentifyState::Error));
+        },
         // Server mode
         Actions::Server { expose, path, browser } => {
             onetagger_ui::start_all(StartContext {
@@ -342,6 +377,38 @@ enum Actions {
         /// Keep original subfolders
         #[clap(long)]
         keep_subfolders: bool,
+    },
+    /// Identify files with AcoustID + Shazam (zero trust, dry run)
+    Identify {
+        /// Folder or a text file with one path per line
+        #[clap(short, long)]
+        path: PathBuf,
+
+        /// AcoustID application key (or env ACOUSTID_KEY)
+        #[clap(long)]
+        acoustid_key: Option<String>,
+
+        /// Worker threads (Shazam is throttled globally)
+        #[clap(long, default_value_t = 4)]
+        threads: usize,
+
+        /// Where to write the JSON report
+        #[clap(long, default_value = "identify-report.json")]
+        report: PathBuf,
+
+        /// Tag confirmed files and move them into this folder (otherwise dry run)
+        #[clap(long)]
+        target: Option<PathBuf>,
+
+        /// Folder/file template, e.g. "%albumartist%/%album% (%year%)/%track% - %title%"
+        #[clap(long)]
+        template: Option<String>,
+    },
+    /// Undo an identify run from its journal folder
+    IdentifyUndo {
+        /// Journal folder (<target>/.onetagger-identify/<timestamp>)
+        #[clap(short, long)]
+        journal: PathBuf,
     },
     /// Start OneTagger server mode
     Server {
