@@ -16,8 +16,14 @@ impl FLACSource {
             path: path.as_ref().to_owned(),
             duration: 0
         };
-        // Get duration from decoder
-        flac.duration = flac.get_source()?.total_duration().ok_or(anyhow!("Missing duration"))?.as_millis();
+        // Get duration from decoder, fall back to the STREAMINFO read by lofty
+        flac.duration = match flac.get_source()?.total_duration() {
+            Some(d) => d.as_millis(),
+            None => {
+                use lofty::prelude::*;
+                lofty::read_from_path(&flac.path)?.properties().duration().as_millis()
+            }
+        };
 
         Ok(flac)
     }
@@ -29,8 +35,12 @@ impl AudioSource for FLACSource {
         self.duration
     }
 
-    // Get rodio decoder
+    // Get rodio decoder. Claxon rejects some valid files (e.g. unusual block sizes),
+    // Symphonia's FLAC decoder is used as fallback
     fn get_source(&self) -> Result<Box<dyn Source<Item = i16> + Send>, Error> {
-        Ok(Box::new(Decoder::new_flac(BufReader::new(File::open(&self.path)?))?))
+        match Decoder::new_flac(BufReader::new(File::open(&self.path)?)) {
+            Ok(d) => Ok(Box::new(d)),
+            Err(_) => Ok(Box::new(Decoder::new(BufReader::new(File::open(&self.path)?))?)),
+        }
     }
 }

@@ -15,7 +15,11 @@ lazy_static::lazy_static! {
     /// Edition noise in album titles
     static ref TRAILING_NUMBER: Regex = Regex::new(r"(\s(vol|volume|pt|part))?\s\d+$").unwrap();
     static ref RELEASE_SUFFIX: Regex = Regex::new(r"(?i)\s-\s(ep|single)\s*$").unwrap();
-    static ref EDITION: Regex = Regex::new(r"(?i)[\(\[][^\)\]]*(edition|version|remaster|deluxe|expanded|anniversary|bonus|special|explicit|clean|live|extended|tracks|soundtrack)[^\)\]]*[\)\]]").unwrap();
+    /// ": Original Motion Picture Soundtrack" / " - Deluxe Edition" style suffixes without brackets
+    static ref EDITION_SUFFIX: Regex = Regex::new(r"(?i)\s*(:|\s-\s|–)\s*[^:–]*(soundtrack|motion picture|music from|edition|remaster|deluxe|expanded|anniversary|the remixes)[^:–]*$").unwrap();
+    /// Album names that are compilations / DJ series
+    static ref COMPILATION_NAME: Regex = Regex::new(r"(?i)(\bbest of\b|\bgreatest\b|\bhits\b|\bcollection\b|\bessentials?\b|\banthology\b|\bstudio albums\b|\bbox set\b|\bthe singles\b|\bdefinitive\b|\bultimate\b|\bretrospective\b|\bclassics\b|\bpresents\b|\bdj tools\b|\bmixed by\b|\bsampler\b|\bvol(ume)?\.?\s*\d+|[a-z]\s+\d{1,3}$|\bnow\b.*\bmusic\b|\byears\b)").unwrap();
+    static ref EDITION: Regex = Regex::new(r"(?i)[\(\[][^\)\]]*(edition|version|remaster|deluxe|expanded|anniversary|bonus|special|explicit|clean|live|extended|tracks|soundtrack|remixes)[^\)\]]*[\)\]]").unwrap();
 }
 
 /// Versions that make a recording a different recording
@@ -42,7 +46,14 @@ pub fn core_title(title: &str) -> String {
 pub fn core_album(album: &str) -> String {
     let a = FEAT.replace_all(album, "");
     let a = EDITION.replace_all(&a, "");
+    let a = EDITION_SUFFIX.replace(&a, "");
     normalize(&RELEASE_SUFFIX.replace_all(&a, ""))
+}
+
+/// Album name that reads like a compilation / DJ series ("The Very Best Of", "Italian Hardstyle 14")
+pub fn looks_like_compilation(album: &str) -> bool {
+    let a = RELEASE_SUFFIX.replace_all(album, "");
+    COMPILATION_NAME.is_match(a.trim())
 }
 
 /// Album title for a MusicBrainz search: without edition brackets, feat. and " - Single" / " - EP"
@@ -214,6 +225,16 @@ mod tests {
         assert!(!album_matches("Master of Puppets (Remastered)", "S&M"));
         assert!(!album_matches("W.A.S.P.", "The Headless Children"));
         assert!(!album_matches("Summer Club", "Summer"));
+        assert!(album_matches("Godzilla: King of the Monsters (Original Motion Picture Soundtrack)", "Godzilla: King of the Monsters: Original Motion Picture Soundtrack"));
+        assert!(album_matches("Glorious (The Remixes) - EP", "Glorious"));
+        assert!(looks_like_compilation("The Indispensable Collection"));
+        assert!(looks_like_compilation("Italian Hardstyle 14"));
+        assert!(looks_like_compilation("Six Studio Albums"));
+        assert!(looks_like_compilation("Best of the 90's"));
+        assert!(!looks_like_compilation("Master of Puppets (Remastered)"));
+        assert!(!looks_like_compilation("Absolution"));
+        assert!(!looks_like_compilation("1989"));
+        assert!(!looks_like_compilation("Hail to the Thief"));
         assert!(album_matches("Turbo 30", "Turbo"));
         assert!(album_matches("Hercules (Original Motion Picture Soundtrack)", "Hercules: An Original Walt Disney Records Soundtrack"));
     }

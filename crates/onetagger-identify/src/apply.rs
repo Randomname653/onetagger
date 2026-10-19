@@ -280,23 +280,103 @@ pub fn write_tags(path: &Path, tags: &TrackTags, cover: Option<Vec<u8>>, kept: V
     Ok(())
 }
 
-/// Apply a confirmed result: journal, wipe, write, move. Returns the new path
+lazy_static::lazy_static! {
+    /// Destination checks + moves happen one at a time (duplicates arrive from parallel threads)
+    static ref APPLY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+}
+
+/// Audio quality for comparing duplicates: (lossless, bit depth, sample rate, bitrate)
+fn quality(path: &Path) -> (bool, u8, u32, u32) {
+    use lofty::prelude::*;
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    match lofty::read_from_path(path) {
+        Ok(f) => {
+            let p = f.properties();
+            let bitrate = p.audio_bitrate().or(p.overall_bitrate()).unwrap_or(0);
+            let lossless = matches!(ext.as_str(), "flac" | "wav" | "aif" | "aiff")
+                || (ext == "m4a" && p.bit_depth().is_some() && bitrate > 500);
+            (lossless, p.bit_depth().unwrap_or(16), p.sample_rate().unwrap_or(0), bitrate)
+        },
+        Err(_) => (false, 0, 0, 0),
+    }
+}
+
+/// Recording MBID tagged in an already applied file
+fn tagged_recording(path: &Path) -> Option<String> {
+    let tag = Tag::load_file(path, false).ok()?;
+    let key = match &tag {
+        Tag::FLAC(_) | Tag::Vorbis(_) => "MUSICBRAINZ_TRACKID".to_string(),
+        Tag::ID3(_) => "MusicBrainz Track Id".to_string(),
+        Tag::MP4(_) => "com.apple.iTunes:MusicBrainz Track Id".to_string(),
+    };
+    tag.tag().get_raw(&key).and_then(|v| v.first().cloned())
+}
+
+/// Free path inside <target>/_Duplikate mirroring the library path
+fn duplicate_path(config: &ApplyConfig, dest: &Path) -> PathBuf {
+    let relative = dest.strip_prefix(&config.target).map(|p| p.to_owned()).unwrap_or_else(|_| PathBuf::from(dest.file_name().unwrap_or_default()));
+    let base = config.target.join("_Duplikate").join(relative);
+    let mut path = base.clone();
+    let mut n = 2;
+    while path.exists() {
+        let stem = base.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let ext = base.extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        path = base.with_file_name(format!("{stem} ({n}).{ext}"));
+        n += 1;
+    }
+    path
+}
+
+/// Readable message for missing write permission on the NAS
+fn explain(e: Error, path: &Path) -> Error {
+    let denied = e.chain().any(|c| c.downcast_ref::<std::io::Error>().map(|io| io.kind() == std::io::ErrorKind::PermissionDenied).unwrap_or(false))
+        || e.to_string().contains("os error 5");
+    if denied {
+        anyhow!("Keine Schreibrechte auf {} (Dateirechte auf dem NAS prüfen)", path.display())
+    } else {
+        e
+    }
+}
+
+/// Apply a confirmed result: journal, wipe, write, move. Returns the new path.
+/// If the same recording is already in the library, the better copy stays there
+/// and the other one goes to <target>/_Duplikate.
 pub fn apply(result: &IdentifyResult, config: &ApplyConfig, journal: &Journal) -> Result<PathBuf, Error> {
     let release = result.chosen_release().ok_or(anyhow!("No release"))?;
     let recording = &release.recording_id;
     let tags = track_tags(&release.release_id, recording, (release.disc, release.track))?;
-    let dest = destination(config, &tags, &result.path);
-    if dest.exists() {
-        return Err(anyhow!("Ziel existiert bereits: {}", dest.display()));
-    }
     let cover = musicbrainz::front_cover(&release.release_id).unwrap_or(None);
+    // Fail before touching anything if the file can't be written (NAS permissions)
+    std::fs::OpenOptions::new().write(true).open(&result.path).map_err(|e| explain(e.into(), &result.path))?;
 
-    let mut entry = journal.snapshot(&result.path, &dest, Some(recording.clone()), Some(release.release_id.clone()))?;
+    let _lock = APPLY_LOCK.lock().unwrap();
+    let mut dest = destination(config, &tags, &result.path);
+    if dest.exists() {
+        if tagged_recording(&dest).as_deref() != Some(recording.as_str()) {
+            return Err(anyhow!("Ziel existiert bereits mit anderer Aufnahme: {}", dest.display()));
+        }
+        if quality(&result.path) > quality(&dest) {
+            // New file is better: the one in the library moves to _Duplikate
+            let dupe = duplicate_path(config, &dest);
+            let mut old = journal.snapshot(&dest, &dupe, Some(recording.clone()), Some(release.release_id.clone()))?;
+            journal.append(&old)?;
+            journal::move_file(&dest, &dupe)?;
+            old.done = true;
+            journal.append(&old)?;
+            info!("Duplicate: better copy replaces {dest:?}, old one moved to {dupe:?}");
+        } else {
+            dest = duplicate_path(config, &dest);
+            info!("Duplicate: {:?} goes to {dest:?}", result.path);
+        }
+    }
+
+    let mut entry = journal.snapshot(&result.path, &dest, Some(recording.clone()), Some(release.release_id.clone()))
+        .map_err(|e| explain(e, &result.path))?;
     journal.append(&entry)?;
 
-    let kept = wipe(&result.path)?;
-    write_tags(&result.path, &tags, cover, kept)?;
-    journal::move_file(&result.path, &dest)?;
+    let kept = wipe(&result.path).map_err(|e| explain(e, &result.path))?;
+    write_tags(&result.path, &tags, cover, kept).map_err(|e| explain(e, &result.path))?;
+    journal::move_file(&result.path, &dest).map_err(|e| explain(e, &result.path))?;
 
     entry.done = true;
     journal.append(&entry)?;

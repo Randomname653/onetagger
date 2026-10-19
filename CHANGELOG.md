@@ -42,6 +42,20 @@ loosening the rule that AcoustID and Shazam must agree.
 - Interview / spoken word releases are no longer chosen as the album.
 - Review dialog: files only Shazam knows get release suggestions via Shazam's ISRC.
 
+### Identify: duplicates, robustness
+- **Duplicates:** if the same recording is already in the library, the better copy stays there
+  (lossless > lossy, then bit depth, sample rate, bitrate) and the other one is tagged and moved to
+  `<target>/_Duplikate/` with the same folder structure. Both moves are in the journal, undo restores
+  everything byte for byte.
+- Album comparison ignores ": Original Motion Picture Soundtrack" style suffixes and
+  "(The Remixes)"; Shazam albums unknown to MusicBrainz that read like a compilation / DJ series
+  ("The Very Best Of", "Italian Hardstyle 14") don't veto an original studio release.
+  Measured on a real review sample: another ~15 % of album review cases confirmed.
+- FLAC files the default decoder (claxon) rejects are decoded with Symphonia instead.
+- Files without a duration in the header get it from the stream.
+- Missing write permission (e.g. files owned by another NAS user) is reported clearly and checked
+  before anything is changed.
+
 ### Fork maintenance
 - Weekly GitHub Action (`.github/workflows/upstream-sync.yml`): updates the upstream status line in
   the README and merges new upstream commits. Conflicting upstream changes are never pushed to

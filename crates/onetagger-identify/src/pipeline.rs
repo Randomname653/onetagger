@@ -15,7 +15,7 @@ use crate::matching::{album_similarity, title_similarity};
 use crate::types::*;
 use crate::{consensus, release, shazam_album};
 use crate::release::Unclear;
-use crate::matching::hard_versions;
+use crate::matching::{hard_versions, looks_like_compilation};
 use crate::apply::{self, ApplyConfig};
 use crate::journal::Journal;
 
@@ -216,6 +216,16 @@ fn evaluate(result: &mut IdentifyResult, aid: &AcoustIdResponse, siblings: &Hash
                     choice.clear = true;
                     choice.unclear = None;
                 },
+                // Shazam's album is unknown to MusicBrainz but reads like a compilation / DJ series:
+                // no objection to an original studio release
+                shazam_album::Lookup::NotFound if choice.unclear == Some(Unclear::ShazamOtherAlbum)
+                    && s.album.as_deref().map(looks_like_compilation).unwrap_or(false)
+                    && choice.candidates.first().map(|c| c.track.is_some() && c.secondary.is_empty()
+                        && matches!(c.kind.as_deref(), Some("Album") | Some("EP") | Some("Single"))).unwrap_or(false) => {
+                    choice.reason = format!("„{}“ (Shazams „{}“ ist dem Namen nach eine Compilation)", choice.candidates[0].title, s.album.clone().unwrap_or_default());
+                    choice.clear = true;
+                    choice.unclear = None;
+                },
                 _ => {}
             }
         }
@@ -277,7 +287,12 @@ pub fn run(files: Vec<PathBuf>, config: IdentifyConfig) -> Result<(Receiver<Iden
                 }
                 if let (true, Some(apply_config), Some(journal)) = (config.auto_apply, &config.apply, &journal) {
                     match apply::apply(&result, apply_config, journal) {
-                        Ok(dest) => result.applied = Some(dest),
+                        Ok(dest) => {
+                            if dest.components().any(|c| c.as_os_str() == "_Duplikate") {
+                                result.reason = format!("Duplikat, bessere Kopie liegt schon in der Bibliothek ({})", result.reason);
+                            }
+                            result.applied = Some(dest);
+                        },
                         Err(e) => {
                             warn!("Apply failed for {path:?}: {e}");
                             result.state = IdentifyState::Review;

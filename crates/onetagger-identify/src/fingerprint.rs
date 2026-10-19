@@ -31,6 +31,19 @@ pub fn fingerprint_file(path: impl AsRef<Path>) -> Result<Fingerprint, Error> {
         return Err(anyhow!("Audio too short to fingerprint"));
     }
 
+    // Some files (e.g. M4A without duration in the header) report 0: ask lofty, else count samples
+    let mut duration = duration;
+    if duration == 0 {
+        use lofty::prelude::*;
+        duration = lofty::read_from_path(path.as_ref()).map(|f| f.properties().duration().as_secs() as u32).unwrap_or(0);
+        if duration == 0 && samples.len() < rate as usize * channels as usize * FINGERPRINT_SECONDS {
+            duration = (samples.len() / (rate as usize * channels as usize)) as u32;
+        }
+        if duration == 0 {
+            return Err(anyhow!("Unknown duration"));
+        }
+    }
+
     let config = Configuration::preset_test2();
     let mut printer = Fingerprinter::new(&config);
     printer.start(rate, channels).map_err(|e| anyhow!("Fingerprinter: {e:?}"))?;
