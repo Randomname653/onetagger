@@ -16,10 +16,11 @@ pub fn release(id: &str) -> Result<Option<Value>, Error> {
     http::get_json(&url, &MUSICBRAINZ, Some("musicbrainz"))
 }
 
-/// Front cover from the Cover Art Archive (1200px), None if missing
+/// Front cover from the Cover Art Archive (1200px), None if missing.
+/// Not cached on disk: almost every file is on a different release, so the cache only grew.
 pub fn front_cover(release_id: &str) -> Result<Option<Vec<u8>>, Error> {
     let url = format!("https://coverartarchive.org/release/{release_id}/front-1200");
-    http::get(&url, &COVERART, Some("coverart"))
+    http::get(&url, &COVERART, None)
 }
 
 /// "Artist A feat. Artist B" from an artist-credit array
